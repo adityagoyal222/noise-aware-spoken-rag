@@ -1,3 +1,6 @@
 pandas
 matplotlib
 seaborn
+faster-whisper
+pyannote.audio
+soundfile
