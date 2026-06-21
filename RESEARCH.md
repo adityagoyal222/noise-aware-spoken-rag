@@ -58,7 +58,8 @@ All pipelines must be run across these Whisper model sizes to enable WER stratif
 **Answer quality:** Exact Match, F1, BERTScore (answer generation via local LLM — Mistral-7B-Instruct or LLaMA-3-8B-Instruct via Ollama, inference-only)
 
 **Stratification dimensions:**
-- WER tier: 0–15%, 15–30%, >30% (WER computed per meeting by aligning Whisper output against AMI gold transcripts)
+- WER tier: 0–15%, 15–30%, >30% (WER computed per meeting — `data/analysis/wer_per_meeting_<model>.csv`)
+- DER tier: 0–15%, 15–30%, >30% (DER computed per meeting — `data/analysis/der_per_meeting.csv`; mean DER=0.124, range 0.06–0.31)
 - Meeting length (short / medium / long by word count)
 - Number of active speakers (from diarization output)
 - Difficulty tier: `difficulty_flag = "ok"` vs. full set
@@ -100,6 +101,7 @@ All pipeline stages run as standalone scripts. Notebooks are kept as read-only r
 | `scripts/run_asr.py` | Done | Run Whisper ASR for all model sizes (`--models`, `--retry-failed`) |
 | `scripts/run_alignment.py` | Done | Align ASR + diarization (`--model <name>` or `--all`) |
 | `scripts/compute_wer.py` | Done | Compute per-meeting WER by aligning Whisper output against AMI gold transcripts |
+| `scripts/compute_der.py` | Done | Compute per-meeting DER by comparing pyannote RTTM against AMI gold speaker annotations |
 | `scripts/generate_eval_queries_new.py` | Done | Generate queries, relevance labels, and reference answers |
 | `scripts/retrieval_dense.py` | Done | Dense cosine-similarity retrieval baseline (`--model`, `--topk`) |
 | `scripts/retrieval_bm25.py` | Done | BM25-only retrieval |

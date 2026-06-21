@@ -228,7 +228,19 @@ R(c) = α·s(q,c) + β·ASRConf(c) + γ·DiarStab(c) + δ·TurnComp(c) − ε·R
 
 ---
 
-## 7a. WER Computation
+## 7a. DER Computation
+
+- **Purpose:** Per-meeting DER is required alongside WER for RQ1/RQ4 stratification. DER captures diarization quality independent of ASR model choice (diarization was run once).
+- **Reference:** Gold speaker annotations derived from AMI per-speaker word XML files (`data/gold_transcripts/<session>.<speaker>.words.xml`). Each speaker's words are merged into contiguous segments (within-speaker gaps < 0.3s collapsed), producing a reference `Annotation` object.
+- **Hypothesis:** pyannote.audio RTTM output from `data/diarization_outputs/rttm/<audio_id>.rttm`.
+- **Metric:** `pyannote.metrics.diarization.DiarizationErrorRate` with `collar=0.25s` (standard AMI evaluation setting). DER = (missed + false alarm + confusion) / total reference speech.
+- **Results:** 36 meetings. Mean DER=0.124, range 0.059–0.306. Tier distribution: low (≤15%) = 28, medium (15–30%) = 7, high (>30%) = 1.
+- **Output:** `data/analysis/der_per_meeting.csv` with per-component breakdown (missed, false alarm, confusion rates).
+- **Script:** `scripts/compute_der.py`.
+
+---
+
+## 7b. WER Computation
 
 - **Purpose:** Per-meeting WER is required for WER-stratified analysis (RQ1, RQ4). Each meeting is assigned to a WER tier (0–15%, 15–30%, >30%) based on its Whisper model output.
 - **Method:** Whisper plain-text transcript (from `data/asr_outputs/<model>/transcripts/`) is aligned against the AMI gold transcript (from `data/gold_transcripts/`) using the `jiwer` library.
