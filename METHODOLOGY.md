@@ -200,15 +200,16 @@ R(c) = α·s(q,c) + β·ASRConf(c) + γ·DiarStab(c) + δ·TurnComp(c) − ε·R
 - `Redund` is subtracted: high token overlap with neighboring chunks indicates a repeated or low-information segment.
 - `MixPenalty` is subtracted: heavily mixed-speaker chunks are less reliable for speaker-attributed retrieval.
 - `DiarStab` and `MixPenalty` are kept as separate terms to allow independent ablation of each signal.
-- Default weights: α=1.0, β=0.3, γ=0.3, δ=0.2, ε=0.1, μ=0.4. All weights are configurable via CLI flags for manual tuning experiments.
-- The weights stored in the summary CSV alongside metrics, so any run is fully reproducible from the output file alone.
+- Default weights: α=2.0, β=0.2, γ=0.2, δ=0.15, ε=0.1, μ=0.15. The sum of noise feature weights (β+γ+δ+ε+μ = 0.8) is kept well below α so that semantic similarity always dominates ranking. This prevents high-quality but irrelevant chunks from displacing genuinely relevant ones via noise signal alone.
+- All weights are configurable via CLI flags for manual tuning experiments.
+- The weights are stored in the summary CSV alongside metrics, so any run is fully reproducible from the output file alone.
 
 ### 6.5 NAES-L (Learned Noise-Aware Reranking)
 
 - Same feature set as NAES-H: `[s(q,c), ASRConf, DiarStab, TurnComp, Redund, MixPenalty]`.
 - **Training data:** (query, chunk, binary_relevance) triples from `data/eval/retrieval_eval_labels.csv`. Only queries with `difficulty_flag = "ok"` and at least one positive are used.
 - **Model:** Logistic regression (`sklearn.linear_model.LogisticRegression`). The learned weights replace the manually set weights in the NAES-H formula. Logistic regression is chosen because (a) the feature set is small and scalar, (b) the model is interpretable — coefficients directly correspond to each signal's contribution — and (c) it adds negligible inference overhead.
-- **Cross-validation:** Leave-one-meeting-out (LOMO) — for each meeting, train on triples from all other meetings, predict on the held-out meeting. This avoids leakage: the model never sees chunks or queries from the meeting being evaluated.
+- **Cross-validation:** 5-fold meeting-stratified CV — each unique meeting is assigned to one of 5 folds (round-robin). All queries from a meeting go into the same fold, preventing within-meeting train/test leakage. Each training fold contains ~80% of the data (~60+ queries), giving the model enough positive examples to learn meaningful weights. (Leave-one-meeting-out was evaluated but discarded: with only ~3 positives per held-out meeting, the logistic regression could not learn, producing near-zero coefficients and degenerate rankings.)
 - **Optimization target:** NDCG@10 on the held-out fold, used to select the regularization strength `C` (grid search over `[0.01, 0.1, 1.0, 10.0]`).
 - **Inference:** Given a dense retrieval pool of 50 candidates, score each with the learned logistic regression, sort descending by predicted relevance probability, return top-K.
 - **Primary thesis contribution:** NAES-L is the principal proposed method. The comparison NAES-L vs. Cross-Encoder answers RQ2 (do audio signals add value over text-only reranking?). The comparison NAES-L vs. NAES-H answers whether learned weights outperform heuristic weights on this data.

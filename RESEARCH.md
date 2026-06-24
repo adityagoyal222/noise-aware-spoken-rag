@@ -27,8 +27,8 @@ Listed in order from floor to ceiling:
 | **Dense baseline** | Cosine similarity dense retrieval, no reranking | Done (`scripts/retrieval_dense.py`) |
 | **Cross-encoder** | Dense retrieval + `ms-marco-MiniLM-L-6-v2` reranker (most important comparison) | Done (`scripts/retrieval_crossencoder.py`) |
 | **NAES-H** (Heuristic) | Dense retrieval + noise-aware heuristic reranker | Done (`scripts/retrieval_naes_h.py`) |
-| **NAES-L** (Learned) | Dense retrieval + learned noise-aware reranker | Not started |
-| **Oracle** | Manual AMI gold transcripts as upper-bound performance ceiling | Not started |
+| **NAES-L** (Learned) | Dense retrieval + learned noise-aware reranker | Done (`scripts/retrieval_naes_l.py`) |
+| **Oracle** | Manual AMI gold transcripts as upper-bound performance ceiling | Done (`scripts/retrieval_oracle.py`) |
 
 **Reranking formula (NAES):**
 ```
@@ -107,20 +107,23 @@ All pipeline stages run as standalone scripts. Notebooks are kept as read-only r
 | `scripts/retrieval_bm25.py` | Done | BM25-only retrieval |
 | `scripts/retrieval_crossencoder.py` | Done | Dense + cross-encoder reranker (`ms-marco-MiniLM-L-6-v2`) |
 | `scripts/retrieval_naes_h.py` | Done | Dense + heuristic noise-aware reranker |
-| `scripts/retrieval_naes_l.py` | Not started | Dense + learned noise-aware reranker (logistic regression, leave-one-meeting-out CV) |
+| `scripts/retrieval_naes_l.py` | Done | Dense + learned noise-aware reranker (logistic regression, 5-fold meeting-stratified CV) |
+| `scripts/retrieval_oracle.py` | Done | Dense retrieval over AMI gold transcripts (upper bound) |
+| `scripts/ablation_naes_l.py` | Done | Feature ablation for NAES-L; quantifies per-signal contribution (RQ3) |
 | `scripts/generate_answers.py` | Not started | Answer generation via local LLM over retrieved chunks; computes EM, F1, BERTScore |
 
 ---
 
 ## Baseline Results (medium model, top-10, 96 queries with positives)
 
-| Pipeline      | NDCG@10 | MRR    | Recall@10 |
-|---------------|---------|--------|-----------|
-| BM25          | 0.2761  | 0.2929 | 0.3507    |
-| Dense         | 0.3669  | 0.3858 | 0.4583    |
-| Cross-Encoder | 0.4644  | 0.5000 | 0.5339    |
-| NAES-H        | TBD     | TBD    | TBD       |
-| NAES-L        | TBD     | TBD    | TBD       |
+| Pipeline      | NDCG@10 | MRR    | Recall@10 | Notes |
+|---------------|---------|--------|-----------|-------|
+| BM25          | 0.2761  | 0.2929 | 0.3507    | Lexical floor |
+| NAES-H        | 0.2925  | 0.3048 | 0.3915    | α=2.0 dominant; beats BM25 |
+| NAES-L        | 0.2783  | 0.1885 | 0.5729    | Highest Recall@10; NDCG below dense |
+| Dense         | 0.3669  | 0.3858 | 0.4583    | Semantic baseline |
+| Cross-Encoder | 0.4644  | 0.5000 | 0.5339    | Text-only reranking ceiling |
+| Oracle        | 0.6544  | 0.6007 | 0.9271    | Gold transcripts upper bound |
 
 ---
 

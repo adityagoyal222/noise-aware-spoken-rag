@@ -11,12 +11,15 @@ Pipeline:
   3. Evaluate top-K of the reranked list against relevance labels.
 
 Default weights (tunable via env vars or CLI):
-    alpha  = 1.0  (dense similarity)
-    beta   = 0.3  (ASR confidence)
-    gamma  = 0.3  (diarization stability)
-    delta  = 0.2  (turn completeness)
+    alpha  = 2.0  (dense similarity — dominant term, ensures semantic score drives ranking)
+    beta   = 0.2  (ASR confidence)
+    gamma  = 0.2  (diarization stability)
+    delta  = 0.15 (turn completeness)
     eps    = 0.1  (redundancy penalty — note: high Redund is bad, so subtracted)
-    mu     = 0.4  (mix penalty)
+    mu     = 0.15 (mix penalty)
+
+Weight rationale: sum of noise weights (β+γ+δ+ε+μ = 0.8) is kept well below α
+so that even maximum noise feature values cannot override a strong semantic signal.
 
 Usage:
     python scripts/retrieval_naes_h.py [--model medium] [--topk 10] [--rerank-pool 50]
@@ -57,14 +60,17 @@ TOP_K_DEFAULT = 10
 RERANK_POOL_DEFAULT = 50
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 
-# Default NAES-H weights
+# Default NAES-H weights.
+# α is set to 2.0 so semantic similarity always dominates the noise features.
+# Sum of noise weights (β+γ+δ+ε+μ = 0.8) is well below α, ensuring that even
+# maximum noise feature values cannot override a strong semantic signal.
 DEFAULT_WEIGHTS = {
-    "alpha": 1.0,   # dense similarity score
-    "beta":  0.3,   # ASRConf
-    "gamma": 0.3,   # DiarStab
-    "delta": 0.2,   # TurnComp
+    "alpha": 2.0,   # dense similarity score (dominant term)
+    "beta":  0.2,   # ASRConf
+    "gamma": 0.2,   # DiarStab
+    "delta": 0.15,  # TurnComp
     "eps":   0.1,   # Redund (subtracted — high redundancy is bad)
-    "mu":    0.4,   # MixPenalty (subtracted)
+    "mu":    0.15,  # MixPenalty (subtracted)
 }
 
 
