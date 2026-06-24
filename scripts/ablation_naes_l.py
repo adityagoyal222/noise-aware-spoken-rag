@@ -146,7 +146,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="medium")
     parser.add_argument("--topk", type=int, default=10)
-    parser.add_argument("--rerank-pool", type=int, default=50)
+    parser.add_argument("--rerank-pool", type=int, default=100)
     args = parser.parse_args()
 
     tag = datetime.now().strftime("%Y%m%d_%H%M%S")

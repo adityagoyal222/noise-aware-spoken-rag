@@ -5,8 +5,8 @@ Pipeline:
   1. Retrieve top-N candidates per query using dense cosine similarity.
   2. Rerank using the NAES heuristic formula with manually set weights:
 
-     R(c) = α·s(q,c) + β·ASRConf(c) + γ·DiarStab(c)
-            + δ·TurnComp(c) + ε·Redund(c) − μ·MixPenalty(c)
+     R(c) = α·s(q,c) + β·ASRConf(c) − γ·DiarStab(c)
+            + δ·TurnComp(c) − ε·Redund(c) − μ·MixPenalty(c)
 
   3. Evaluate top-K of the reranked list against relevance labels.
 
@@ -18,8 +18,10 @@ Default weights (tunable via env vars or CLI):
     eps    = 0.1  (redundancy penalty — note: high Redund is bad, so subtracted)
     mu     = 0.15 (mix penalty)
 
-Weight rationale: sum of noise weights (β+γ+δ+ε+μ = 0.8) is kept well below α
-so that even maximum noise feature values cannot override a strong semantic signal.
+Weight rationale: DiarStab is negated because empirical analysis shows relevant chunks
+have lower diarization stability (r=−0.057) — they occur at speaker-turn boundaries.
+Sum of |noise weights| (β+γ+δ+ε+μ = 0.8) is kept well below α (2.0) so semantic
+similarity always dominates.
 
 Usage:
     python scripts/retrieval_naes_h.py [--model medium] [--topk 10] [--rerank-pool 50]
@@ -57,7 +59,7 @@ CHECKPOINTS_DIR = EVAL_DIR / "checkpoints"
 EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 BATCH_SIZE = 128
 TOP_K_DEFAULT = 10
-RERANK_POOL_DEFAULT = 50
+RERANK_POOL_DEFAULT = 100
 DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 
 # Default NAES-H weights.
@@ -67,7 +69,7 @@ DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 DEFAULT_WEIGHTS = {
     "alpha": 2.0,   # dense similarity score (dominant term)
     "beta":  0.2,   # ASRConf
-    "gamma": 0.2,   # DiarStab
+    "gamma": 0.2,   # DiarStab (subtracted — relevant chunks have lower stability empirically)
     "delta": 0.15,  # TurnComp
     "eps":   0.1,   # Redund (subtracted — high redundancy is bad)
     "mu":    0.15,  # MixPenalty (subtracted)
@@ -206,7 +208,7 @@ def naes_score(
     return (
         weights["alpha"] * semantic_score
         + weights["beta"]  * asr_conf
-        + weights["gamma"] * diar_stab
+        - weights["gamma"] * diar_stab
         + weights["delta"] * turn_comp
         - weights["eps"]   * redund
         - weights["mu"]    * mix_penalty

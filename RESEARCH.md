@@ -32,7 +32,7 @@ Listed in order from floor to ceiling:
 
 **Reranking formula (NAES):**
 ```
-R(c) = α·s(q,c) + β·ASRConf(c) + γ·DiarStab(c) + δ·TurnComp(c) − ε·Redund(c) − μ·MixPenalty(c)
+R(c) = α·s(q,c) + β·ASRConf(c) − γ·DiarStab(c) + δ·TurnComp(c) − ε·Redund(c) − μ·MixPenalty(c)
 ```
 
 ---
@@ -119,11 +119,28 @@ All pipeline stages run as standalone scripts. Notebooks are kept as read-only r
 | Pipeline      | NDCG@10 | MRR    | Recall@10 | Notes |
 |---------------|---------|--------|-----------|-------|
 | BM25          | 0.2761  | 0.2929 | 0.3507    | Lexical floor |
-| NAES-H        | 0.2925  | 0.3048 | 0.3915    | α=2.0 dominant; beats BM25 |
-| NAES-L        | 0.2783  | 0.1885 | 0.5729    | Highest Recall@10; NDCG below dense |
+| NAES-L        | 0.2783  | 0.1885 | 0.5729    | Highest Recall@10; NDCG below dense (noise features hurt LR) |
+| NAES-H        | 0.3583  | 0.3809 | 0.4549    | DiarStab negated; pool=100; near-matches Dense |
 | Dense         | 0.3669  | 0.3858 | 0.4583    | Semantic baseline |
 | Cross-Encoder | 0.4644  | 0.5000 | 0.5339    | Text-only reranking ceiling |
 | Oracle        | 0.6544  | 0.6007 | 0.9271    | Gold transcripts upper bound |
+
+---
+
+## Ablation Results (NAES-L, medium, top-10, pool=100)
+
+Zero-out ablation: each feature is set to 0 and 5-fold CV NDCG@10 is measured. Baseline (all features) = 0.2092.
+
+| Feature dropped | NDCG@10 | ΔNDCG  | Interpretation |
+|-----------------|---------|--------|----------------|
+| semantic_score  | 0.2003  | −0.009 | Most important — sole driver of ranking |
+| ASRConf         | 0.2053  | −0.004 | Small positive contribution |
+| DiarStab        | 0.2084  | −0.001 | Near-inert; negative empirical correlation with relevance |
+| TurnComp        | 0.2122  | +0.003 | Slightly hurts — weak discriminative power |
+| Redund          | 0.2144  | +0.005 | Hurts — adds noise |
+| MixPenalty      | 0.2179  | +0.009 | Most harmful — biggest negative contribution |
+
+**RQ3 finding:** MixPenalty and Redund actively degrade NAES-L. Only semantic_score and (weakly) ASRConf carry useful signal for the logistic regression. The noise features do not generalize across meetings under 5-fold CV.
 
 ---
 
