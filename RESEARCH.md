@@ -144,39 +144,45 @@ Zero-out ablation: each feature is set to 0 and 5-fold CV NDCG@10 is measured. B
 
 ---
 
+## Cross-Model ASR Quality Analysis (RQ1)
+
+WER computed per meeting across all 5 Whisper model sizes (`scripts/compute_wer.py`):
+
+| ASR Model | Mean WER | Notes |
+|-----------|----------|-------|
+| tiny      | 0.893    | Severe hallucination; 30s fixed-window blocks of garbage text |
+| base      | 0.896    | Similar hallucination pattern; retrieval unusable |
+| small     | 0.602    | Georgian script hallucination on some meetings |
+| medium    | 0.410    | Cleanest model; sole model used for retrieval evaluation |
+| large-v3  | 1.711    | Paradoxically worst — English hallucination loops at scale |
+
+**RQ1 finding:** Only `medium` produces usable ASR output for retrieval (mean WER=0.41). All other models hallucinate at rates that make the aligned chunk text meaningless for semantic retrieval — BM25 on tiny returns NDCG=0.018 vs. 0.276 for medium. This is itself a strong finding: there is a WER threshold (~0.5) below which retrieval performance collapses. The cross-model sweep originally planned (Option A: swap chunk text per model) is infeasible because non-medium models do not produce coherent segment boundaries or text. All retrieval experiments are therefore reported on the medium model.
+
+---
+
 ## Next Steps
 
-**1. Run NAES-H on medium model** ← current
-- Script ready: `python scripts/retrieval_naes_h.py --model medium --topk 10 --rerank-pool 50`
-- Compare against cross-encoder to see if heuristic weights beat text-only reranking.
+**1. ✓ Done — All retrieval systems on medium model**
 
-**2. Compute WER per meeting** ✓ Done
-- `scripts/compute_wer.py` — aligns Whisper output against AMI gold transcripts using `jiwer`.
-- Outputs: `data/analysis/wer_per_meeting_<model>.csv` and combined across all models.
-- Medium model WER range: 0.20–1.03, mean 0.41. Some meetings show WER > 1.0 (Whisper hallucination on TS3010 series). These cap to "high" tier.
+**2. ✓ Done — Ablation studies (RQ3)**
 
-**3. Implement and run NAES-L**
-- Learned version: logistic regression trained on (query, chunk, relevance) triples, leave-one-meeting-out CV.
-- Features: `[semantic_score, ASRConf, DiarStab, TurnComp, Redund, MixPenalty]` — same as NAES-H formula.
-- Use `sklearn.linear_model.LogisticRegression`; optimize NDCG@10 on held-out meeting folds.
-- Script: `scripts/retrieval_naes_l.py`
+**3. ✓ Done — WER + DER computation**
 
-**4. Cross-model sweep (all 5 ASR model sizes)**
-- Run all systems (BM25, Dense, CE, NAES-H, NAES-L) across tiny/base/small/medium/large-v3.
-- Use Option A: medium chunk IDs as canonical index, swap chunk text per model.
-- Produces WER-stratification table for RQ1 and RQ4.
+**4. Cross-model sweep** — Superseded by RQ1 finding above. Medium-only evaluation is the correct design choice given hallucination in other models.
 
 **5. Answer quality evaluation**
-- Script needed: `scripts/generate_answers.py` — given retrieval results, prompt local LLM (Mistral-7B or LLaMA-3-8B via Ollama) to generate answers, then compute EM, F1, BERTScore against reference answers.
+- Script ready: `scripts/generate_answers.py` — prompts local LLM (Ollama) to answer from retrieved chunks, computes EM, F1, BERTScore.
+- Requires Ollama running locally with `llama3.1:8b` or similar.
 
-**6. Ablation studies (RQ3)**
-- Drop one NAES feature at a time from NAES-L, retrain, measure NDCG@10 delta.
-- Quantifies per-signal contribution for RQ3.
+**6. ✓ Done — Failure case analysis**
+- 33/96 queries where NAES-L < Dense. Of these, **82% have NAES-L rank-1 from the wrong meeting** vs. 21% for Dense on the same queries.
+- Root cause: NAES-L's learned DiarStab (+0.673) and ASRConf (−0.353) coefficients act as audio quality proxies that select clean-sounding chunks from other meetings over topically relevant but noisier chunks from the correct meeting.
+- Saved: `data/analysis/failure_analysis_naes_l_vs_dense.csv`
 
-**7. Final analysis and write-up**
-- Failure case analysis: queries where NAES-L < dense baseline; inspect chunks + feature values.
-- 2–3 annotated qualitative examples.
-- Update results tables with all final numbers.
+**7. Final write-up**
+- 2–3 annotated qualitative examples with speaker labels, ASRConf, DiarStab values.
+- Update METHODOLOGY.md with final results commentary.
+- Answer quality evaluation (needs Ollama).
 
 ---
 
