@@ -192,16 +192,17 @@ All systems retrieve from the same aligned chunk corpus for a given ASR model si
 Reranking formula:
 
 ```
-R(c) = α·s(q,c) + β·ASRConf(c) − γ·DiarStab(c) + δ·TurnComp(c) − ε·Redund(c) − μ·MixPenalty(c)
+R(c) = α·s(q,c) + β·ASRConf(c) + γ·DiarStab(c) + δ·TurnComp(c) − ε·Redund(c) − μ·MixPenalty(c)
 ```
 
-- `s(q,c)` is the dense cosine similarity score from the initial retrieval stage (first-stage dense retrieval pool of 100 candidates).
+- `s(q,c)` is the dense cosine similarity score from the initial retrieval stage (first-stage dense retrieval pool of 100 candidates, restricted to the query's own meeting).
 - All feature values are in [0, 1] by construction — no additional normalization needed at scoring time.
 - `Redund` is subtracted: high token overlap with neighboring chunks indicates a repeated or low-information segment.
 - `MixPenalty` is subtracted: heavily mixed-speaker chunks are less reliable for speaker-attributed retrieval.
-- `DiarStab` is **subtracted** (γ acts as a penalty): empirical feature analysis on the eval set shows that relevant chunks have *lower* mean DiarStab than irrelevant ones (pos=0.422, neg=0.528; r=−0.057). This is consistent with the finding that relevant content tends to occur at speaker-turn boundaries and during active decision moments — exactly where diarization stability is lowest. Adding DiarStab as a positive reward term was found to actively hurt ranking quality.
+- `DiarStab` is added as a positive reward: per-meeting ablation (the correct evaluation scope) confirms DiarStab contributes positively (NDCG drops −0.009 when zeroed). An earlier global-index analysis appeared to show DiarStab negatively correlated with relevance — this was an artifact of cross-meeting rank pollution where high-stability chunks from the wrong meeting outranked lower-stability chunks from the correct meeting.
 - `DiarStab` and `MixPenalty` are kept as separate terms to allow independent ablation of each signal.
-- Default weights: α=2.0, β=0.2, γ=0.2, δ=0.15, ε=0.1, μ=0.15. The sum of |noise weights| (β+γ+δ+ε+μ = 0.8) is kept well below α so that semantic similarity always dominates ranking.
+- Default weights: α=2.0, β=0.2, γ=0.2, δ=0.15, ε=0.1, μ=0.15. The sum of noise weights (β+γ+δ+ε+μ = 0.8) is kept well below α so that semantic similarity always dominates ranking.
+- **Evaluation scope:** all NAES-H results use `--per-meeting`, restricting the dense retrieval pool to chunks from the query's own meeting. This is the correct deployment assumption — in a real spoken RAG system, the target meeting is always known.
 - All weights are configurable via CLI flags for manual tuning experiments.
 - The weights are stored in the summary CSV alongside metrics, so any run is fully reproducible from the output file alone.
 

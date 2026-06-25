@@ -32,7 +32,7 @@ Listed in order from floor to ceiling:
 
 **Reranking formula (NAES):**
 ```
-R(c) = α·s(q,c) + β·ASRConf(c) − γ·DiarStab(c) + δ·TurnComp(c) − ε·Redund(c) − μ·MixPenalty(c)
+R(c) = α·s(q,c) + β·ASRConf(c) + γ·DiarStab(c) + δ·TurnComp(c) − ε·Redund(c) − μ·MixPenalty(c)
 ```
 
 ---
@@ -133,7 +133,7 @@ All pipeline stages run as standalone scripts. Notebooks are kept as read-only r
 |-------------------|---------|--------|-----------|-------|
 | BM25-PM           | 0.5582  | 0.5570 | 0.7170    | +102% vs global BM25 |
 | Dense-PM          | 0.5962  | 0.6376 | 0.7101    | +63% vs global Dense |
-| NAES-H-PM         | 0.6081  | 0.6408 | 0.7439    | Beats Dense-PM; noise features now help |
+| NAES-H-PM         | 0.6151  | 0.6271 | 0.7830    | DiarStab restored as positive reward; beats Dense-PM |
 | NAES-L-PM         | 0.6240  | 0.5796 | 0.8316    | Best Recall@10 |
 | Cross-Encoder-PM  | 0.7569  | 0.8003 | 0.8689    | New ceiling; +63% vs global CE |
 | Oracle            | 0.6544  | 0.6007 | 0.9271    | Gold transcripts upper bound |
@@ -202,10 +202,11 @@ WER computed per meeting across all 5 Whisper model sizes (`scripts/compute_wer.
 - Script ready: `scripts/generate_answers.py` — prompts local LLM (Ollama) to answer from retrieved chunks, computes EM, F1, BERTScore.
 - Requires Ollama running locally with `llama3.1:8b` or similar.
 
-**6. ✓ Done — Failure case analysis**
-- 33/96 queries where NAES-L < Dense. Of these, **82% have NAES-L rank-1 from the wrong meeting** vs. 21% for Dense on the same queries.
-- Root cause: NAES-L's learned DiarStab (+0.673) and ASRConf (−0.353) coefficients act as audio quality proxies that select clean-sounding chunks from other meetings over topically relevant but noisier chunks from the correct meeting.
-- Saved: `data/analysis/failure_analysis_naes_l_vs_dense.csv`
+**6. ✓ Done — Failure case analysis (global index)**
+- Under global evaluation: 33/96 queries where NAES-L < Dense, of which 82% had NAES-L rank-1 from the wrong meeting vs. 21% for Dense.
+- This diagnosed the root cause of poor global performance: cross-meeting rank pollution where audio quality proxies (DiarStab, ASRConf) promoted clean chunks from other meetings.
+- **Resolution:** per-meeting filter eliminates this failure mode entirely. NAES-L-PM (0.624 NDCG) now outperforms Dense-PM (0.596).
+- Saved: `data/analysis/failure_analysis_naes_l_vs_dense.csv` (global index run, kept as diagnostic evidence)
 
 **7. Final write-up**
 - 2–3 annotated qualitative examples with speaker labels, ASRConf, DiarStab values.
