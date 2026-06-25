@@ -108,6 +108,7 @@ def load_query_labels(queries_csv: Path, checkpoints_dir: Path) -> pd.DataFrame:
             label_rows.append({
                 "query_id": str(label["query_id"]),
                 "query_text": str(label["query_text"]),
+                "audio_id": str(row.audio_id),
                 "chunk_id": str(label["chunk_id"]),
                 "relevance": int(label.get("relevance", 1)),
             })
@@ -176,13 +177,25 @@ def evaluate(
     bm25: BM25Okapi,
     chunk_ids: list[str],
     top_k: int,
+    per_meeting: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    query_texts = labels_df[["query_id", "query_text"]].drop_duplicates("query_id")
+    # Pre-build per-meeting BM25 indices if needed
+    meeting_indices: dict = {}
+    if per_meeting:
+        for meeting_id, grp in chunks_df.groupby("audio_id"):
+            m_ids = grp["chunk_id"].astype(str).tolist()
+            corpus = [tokenize(t) for t in grp["text"].astype(str).tolist()]
+            non_empty = [toks for toks in corpus if toks]
+            if not non_empty:
+                continue
+            meeting_indices[meeting_id] = (BM25Okapi(corpus), m_ids)
+
+    query_meta = labels_df[["query_id", "query_text", "audio_id"]].drop_duplicates("query_id")
 
     result_rows = []
     metric_rows = []
 
-    for row in query_texts.itertuples(index=False):
+    for row in query_meta.itertuples(index=False):
         query_id = row.query_id
         query_text = row.query_text
         relevant_set = set(
@@ -192,7 +205,13 @@ def evaluate(
             ].astype(str).tolist()
         )
 
-        candidates = retrieve_bm25(query_text, top_k, bm25, chunks_df, chunk_ids)
+        if per_meeting and row.audio_id in meeting_indices:
+            m_bm25, m_ids = meeting_indices[row.audio_id]
+            m_chunks = chunks_df[chunks_df["audio_id"] == row.audio_id]
+            candidates = retrieve_bm25(query_text, top_k, m_bm25, m_chunks, m_ids)
+        else:
+            candidates = retrieve_bm25(query_text, top_k, bm25, chunks_df, chunk_ids)
+
         if candidates.empty:
             metric_rows.append({"query_id": query_id, "mrr": 0.0, "recall": 0.0, "precision": 0.0, "ndcg": 0.0})
             continue
@@ -208,7 +227,8 @@ def evaluate(
     results_df = pd.concat(result_rows, ignore_index=True) if result_rows else pd.DataFrame()
     metrics_df = pd.DataFrame(metric_rows)
     summary_df = metrics_df.mean(numeric_only=True).to_frame().T
-    summary_df.insert(0, "pipeline", "bm25")
+    pipeline_name = "bm25_pm" if per_meeting else "bm25"
+    summary_df.insert(0, "pipeline", pipeline_name)
     return results_df, metrics_df, summary_df
 
 
@@ -218,6 +238,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="BM25 lexical retrieval baseline.")
     parser.add_argument("--model", default="medium", help="ASR model name (e.g. medium, large-v3)")
     parser.add_argument("--topk", type=int, default=TOP_K_DEFAULT)
+    parser.add_argument("--per-meeting", action="store_true",
+                        help="Restrict retrieval to chunks from the query's own meeting")
     args = parser.parse_args()
 
     aligned_dir = PROJECT_ROOT / "data" / "aligned_chunks" / args.model
@@ -239,15 +261,16 @@ def main() -> int:
     labels_df = load_query_labels(QUERIES_CSV, CHECKPOINTS_DIR)
     print(f"  {labels_df['query_id'].nunique()} queries, {len(labels_df)} label rows.")
 
-    print(f"Evaluating (top-{args.topk}) ...")
+    pm_tag = "_pm" if args.per_meeting else ""
+    print(f"Evaluating (top-{args.topk}, per_meeting={args.per_meeting}) ...")
     results_df, metrics_df, summary_df = evaluate(
-        labels_df, chunks_df, bm25, chunk_ids, args.topk
+        labels_df, chunks_df, bm25, chunk_ids, args.topk, args.per_meeting
     )
 
     run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_df.to_csv(retrieval_dir / f"results_{args.model}_{run_tag}.csv", index=False)
-    metrics_df.to_csv(metrics_dir / f"per_query_{args.model}_{run_tag}.csv", index=False)
-    summary_df.to_csv(metrics_dir / f"summary_{args.model}_{run_tag}.csv", index=False)
+    results_df.to_csv(retrieval_dir / f"results_{args.model}{pm_tag}_{run_tag}.csv", index=False)
+    metrics_df.to_csv(metrics_dir / f"per_query_{args.model}{pm_tag}_{run_tag}.csv", index=False)
+    summary_df.to_csv(metrics_dir / f"summary_{args.model}{pm_tag}_{run_tag}.csv", index=False)
 
     print("\n── BM25 retrieval summary ──")
     print(summary_df.to_string(index=False))

@@ -90,9 +90,11 @@ def _assign_folds(labels: pd.DataFrame) -> pd.DataFrame:
 
 
 def stratified_ndcg(pool_df: pd.DataFrame, labels: pd.DataFrame,
-                    feature_cols: list, k: int, c_value: float) -> float:
+                    feature_cols: list, k: int, c_value: float,
+                    per_meeting: bool = False) -> float:
     """Run 5-fold meeting-stratified CV with a given feature set. Returns mean NDCG@k."""
     labels = _assign_folds(labels)
+    query_meeting = labels[["query_id", "audio_id"]].drop_duplicates("query_id").set_index("query_id")["audio_id"].to_dict()
     ndcgs = []
 
     for fold_id in range(N_FOLDS):
@@ -125,7 +127,9 @@ def stratified_ndcg(pool_df: pd.DataFrame, labels: pd.DataFrame,
         rel_map = held_labels.set_index("chunk_id")["relevance"].to_dict()
         held_pool["relevance"] = held_pool["chunk_id"].map(rel_map).fillna(0).astype(int)
 
-        for _, grp in held_pool.groupby("query_id"):
+        for qid, grp in held_pool.groupby("query_id"):
+            if per_meeting and qid in query_meeting:
+                grp = grp[grp["audio_id"] == query_meeting[qid]]
             ranked = grp.sort_values("score", ascending=False)["relevance"].tolist()
             ndcgs.append(_ndcg_at_k(ranked, k))
 
@@ -147,10 +151,13 @@ def main():
     parser.add_argument("--model", default="medium")
     parser.add_argument("--topk", type=int, default=10)
     parser.add_argument("--rerank-pool", type=int, default=100)
+    parser.add_argument("--per-meeting", action="store_true",
+                        help="Restrict reranking pool to the query's own meeting")
     args = parser.parse_args()
 
     tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-    print(f"NAES-L Ablation | model={args.model} topk={args.topk} pool={args.rerank_pool}")
+    pm_tag = "_pm" if args.per_meeting else ""
+    print(f"NAES-L Ablation | model={args.model} topk={args.topk} pool={args.rerank_pool} per_meeting={args.per_meeting}")
 
     pool_df = load_dense_pool(args.model, args.rerank_pool)
     labels = load_labels(args.model)
@@ -159,7 +166,7 @@ def main():
 
     # Baseline: full feature set
     print("\nBaseline (all features)...")
-    baseline_ndcg = stratified_ndcg(pool_df, labels, FEATURE_COLS, args.topk, best_c)
+    baseline_ndcg = stratified_ndcg(pool_df, labels, FEATURE_COLS, args.topk, best_c, args.per_meeting)
     print(f"  Baseline NDCG@{args.topk} = {baseline_ndcg:.4f}")
 
     # Ablation: zero out one feature at a time
@@ -170,7 +177,7 @@ def main():
         print(f"\nAblating: {feat}...")
         ablated_pool = pool_df.copy()
         ablated_pool[feat] = 0.0
-        ndcg = stratified_ndcg(ablated_pool, labels, FEATURE_COLS, args.topk, best_c)
+        ndcg = stratified_ndcg(ablated_pool, labels, FEATURE_COLS, args.topk, best_c, args.per_meeting)
         delta = ndcg - baseline_ndcg
         rows.append({
             "feature_dropped": feat,
@@ -180,7 +187,7 @@ def main():
         print(f"  NDCG@{args.topk} = {ndcg:.4f}  Δ = {delta:+.4f}")
 
     results = pd.DataFrame(rows)
-    out_path = ABLATION_DIR / f"ablation_{args.model}_{tag}.csv"
+    out_path = ABLATION_DIR / f"ablation_{args.model}{pm_tag}_{tag}.csv"
     results.to_csv(out_path, index=False)
 
     print(f"\n{'='*55}")

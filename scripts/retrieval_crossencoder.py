@@ -106,6 +106,7 @@ def load_query_labels(queries_csv: Path, checkpoints_dir: Path) -> pd.DataFrame:
             label_rows.append({
                 "query_id": str(label["query_id"]),
                 "query_text": str(label["query_text"]),
+                "audio_id": str(row.audio_id),
                 "chunk_id": str(label["chunk_id"]),
                 "relevance": int(label.get("relevance", 1)),
             })
@@ -176,11 +177,13 @@ def dense_retrieve(
     index: faiss.IndexFlatIP,
     chunks_df: pd.DataFrame,
     id_map: list[str],
+    meeting_filter: str | None = None,
 ) -> pd.DataFrame:
+    fetch_k = pool_size * 20 if meeting_filter else pool_size
     q_vec = _normalize(
         embed_model.encode([query], convert_to_numpy=True, normalize_embeddings=False)
     )
-    scores, indices = index.search(q_vec.astype(np.float32), pool_size)
+    scores, indices = index.search(q_vec.astype(np.float32), fetch_k)
     scores, indices = scores.flatten(), indices.flatten()
 
     rows = []
@@ -191,9 +194,13 @@ def dense_retrieve(
         match = chunks_df.loc[chunks_df["chunk_id"] == chunk_id]
         if match.empty:
             continue
+        if meeting_filter and match.iloc[0].get("audio_id", "") != meeting_filter:
+            continue
         row = match.iloc[0].to_dict()
         row["semantic_score"] = float(score)
         rows.append(row)
+        if len(rows) == pool_size:
+            break
     return pd.DataFrame(rows)
 
 
@@ -240,18 +247,20 @@ def evaluate(
     id_map: list[str],
     top_k: int,
     rerank_pool: int,
+    per_meeting: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    query_texts = labels_df[["query_id", "query_text"]].drop_duplicates("query_id")
+    query_meta = labels_df[["query_id", "query_text", "audio_id"]].drop_duplicates("query_id")
 
     result_rows = []
     metric_rows = []
 
-    for i, row in enumerate(query_texts.itertuples(index=False), start=1):
+    for i, row in enumerate(query_meta.itertuples(index=False), start=1):
         query_id = row.query_id
         query_text = row.query_text
+        meeting = row.audio_id if per_meeting else None
 
         if i % 20 == 0:
-            print(f"  {i}/{len(query_texts)} queries ...")
+            print(f"  {i}/{len(query_meta)} queries ...")
 
         relevant_set = set(
             labels_df.loc[
@@ -260,15 +269,12 @@ def evaluate(
             ].astype(str).tolist()
         )
 
-        # Stage 1: dense retrieval pool
-        candidates = dense_retrieve(query_text, rerank_pool, embed_model, index, chunks_df, id_map)
+        candidates = dense_retrieve(query_text, rerank_pool, embed_model, index, chunks_df, id_map, meeting)
         if candidates.empty:
             metric_rows.append({"query_id": query_id, "mrr": 0.0, "recall": 0.0, "precision": 0.0, "ndcg": 0.0})
             continue
 
-        # Stage 2: cross-encoder reranking
         reranked = crossencoder_rerank(query_text, candidates, ce_model, top_k)
-
         reranked["query_id"] = query_id
         reranked["query_text"] = query_text
         reranked["relevance"] = reranked["chunk_id"].astype(str).isin(relevant_set).astype(int)
@@ -280,7 +286,8 @@ def evaluate(
     results_df = pd.concat(result_rows, ignore_index=True) if result_rows else pd.DataFrame()
     metrics_df = pd.DataFrame(metric_rows)
     summary_df = metrics_df.mean(numeric_only=True).to_frame().T
-    summary_df.insert(0, "pipeline", "crossencoder")
+    pipeline_name = "crossencoder_pm" if per_meeting else "crossencoder"
+    summary_df.insert(0, "pipeline", pipeline_name)
     return results_df, metrics_df, summary_df
 
 
@@ -293,6 +300,8 @@ def main() -> int:
                         help="Final number of results to return per query after reranking.")
     parser.add_argument("--rerank-pool", type=int, default=RERANK_POOL_DEFAULT,
                         help="Number of dense candidates to rerank (must be >= topk).")
+    parser.add_argument("--per-meeting", action="store_true",
+                        help="Restrict retrieval to chunks from the query's own meeting")
     args = parser.parse_args()
 
     if args.rerank_pool < args.topk:
@@ -324,16 +333,17 @@ def main() -> int:
     labels_df = load_query_labels(QUERIES_CSV, CHECKPOINTS_DIR)
     print(f"  {labels_df['query_id'].nunique()} queries, {len(labels_df)} label rows.")
 
-    print(f"Evaluating (pool={args.rerank_pool} → top-{args.topk}) ...")
+    pm_tag = "_pm" if args.per_meeting else ""
+    print(f"Evaluating (pool={args.rerank_pool} → top-{args.topk}, per_meeting={args.per_meeting}) ...")
     results_df, metrics_df, summary_df = evaluate(
         labels_df, chunks_df, embed_model, ce_model,
-        index, id_map, args.topk, args.rerank_pool,
+        index, id_map, args.topk, args.rerank_pool, args.per_meeting,
     )
 
     run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_df.to_csv(retrieval_dir / f"results_{args.model}_{run_tag}.csv", index=False)
-    metrics_df.to_csv(metrics_dir / f"per_query_{args.model}_{run_tag}.csv", index=False)
-    summary_df.to_csv(metrics_dir / f"summary_{args.model}_{run_tag}.csv", index=False)
+    results_df.to_csv(retrieval_dir / f"results_{args.model}{pm_tag}_{run_tag}.csv", index=False)
+    metrics_df.to_csv(metrics_dir / f"per_query_{args.model}{pm_tag}_{run_tag}.csv", index=False)
+    summary_df.to_csv(metrics_dir / f"summary_{args.model}{pm_tag}_{run_tag}.csv", index=False)
 
     print("\n── Cross-encoder retrieval summary ──")
     print(summary_df.to_string(index=False))

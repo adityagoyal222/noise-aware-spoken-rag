@@ -129,31 +129,46 @@ All pipeline stages run as standalone scripts. Notebooks are kept as read-only r
 
 ### Per-meeting index (retrieval restricted to query's meeting)
 
-| Pipeline      | NDCG@10 | MRR    | Recall@10 | Notes |
-|---------------|---------|--------|-----------|-------|
-| Dense-PM      | 0.5962  | 0.6376 | 0.7101    | +63% NDCG vs global Dense |
-| NAES-H-PM     | 0.6081  | 0.6408 | 0.7439    | Beats Dense-PM; noise features now help |
-| NAES-L-PM     | 0.6240  | 0.5796 | 0.8316    | Best NDCG and Recall; learned model now competitive |
-| Oracle        | 0.6544  | 0.6007 | 0.9271    | Gold transcripts upper bound (unchanged) |
+| Pipeline          | NDCG@10 | MRR    | Recall@10 | Notes |
+|-------------------|---------|--------|-----------|-------|
+| BM25-PM           | 0.5582  | 0.5570 | 0.7170    | +102% vs global BM25 |
+| Dense-PM          | 0.5962  | 0.6376 | 0.7101    | +63% vs global Dense |
+| NAES-H-PM         | 0.6081  | 0.6408 | 0.7439    | Beats Dense-PM; noise features now help |
+| NAES-L-PM         | 0.6240  | 0.5796 | 0.8316    | Best Recall@10 |
+| Cross-Encoder-PM  | 0.7569  | 0.8003 | 0.8689    | New ceiling; +63% vs global CE |
+| Oracle            | 0.6544  | 0.6007 | 0.9271    | Gold transcripts upper bound |
 
-**Key finding:** Per-meeting filtering accounts for the majority of the global-index performance gap. NAES-L-PM (0.624) nearly matches Oracle (0.654) on NDCG. The noise features work as intended once cross-meeting rank pollution is removed — NAES-H-PM and NAES-L-PM both outperform Dense-PM.
+**Key finding:** Per-meeting filtering eliminates cross-meeting rank pollution and unlocks the true signal in every system. Cross-Encoder-PM (0.757) now exceeds Oracle (0.654) on NDCG — reflecting that Oracle uses a fixed 10s chunking while CE-PM benefits from finer Whisper segments at medium quality. NAES-L-PM (0.624) closes most of the gap with Oracle. All noise-aware systems (NAES-H-PM, NAES-L-PM) outperform their text-only equivalents (Dense-PM) confirming that audio signals add value when evaluation is correctly scoped to the relevant meeting.
 
 ---
 
 ## Ablation Results (NAES-L, medium, top-10, pool=100)
 
-Zero-out ablation: each feature is set to 0 and 5-fold CV NDCG@10 is measured. Baseline (all features) = 0.2092.
+Two runs: global index (cross-meeting allowed) vs per-meeting index (correct evaluation scope).
+
+### Global index ablation (baseline NDCG = 0.2092)
 
 | Feature dropped | NDCG@10 | ΔNDCG  | Interpretation |
 |-----------------|---------|--------|----------------|
-| semantic_score  | 0.2003  | −0.009 | Most important — sole driver of ranking |
+| semantic_score  | 0.2003  | −0.009 | Most important |
 | ASRConf         | 0.2053  | −0.004 | Small positive contribution |
-| DiarStab        | 0.2084  | −0.001 | Near-inert; negative empirical correlation with relevance |
-| TurnComp        | 0.2122  | +0.003 | Slightly hurts — weak discriminative power |
-| Redund          | 0.2144  | +0.005 | Hurts — adds noise |
-| MixPenalty      | 0.2179  | +0.009 | Most harmful — biggest negative contribution |
+| DiarStab        | 0.2084  | −0.001 | Near-inert |
+| TurnComp        | 0.2122  | +0.003 | Slightly hurts |
+| Redund          | 0.2144  | +0.005 | Hurts |
+| MixPenalty      | 0.2179  | +0.009 | Most harmful |
 
-**RQ3 finding:** MixPenalty and Redund actively degrade NAES-L. Only semantic_score and (weakly) ASRConf carry useful signal for the logistic regression. The noise features do not generalize across meetings under 5-fold CV.
+### Per-meeting ablation (baseline NDCG = 0.6273)
+
+| Feature dropped | NDCG@10 | ΔNDCG  | Interpretation |
+|-----------------|---------|--------|----------------|
+| semantic_score  | 0.5096  | −0.118 | Dominant signal by far |
+| MixPenalty      | 0.6112  | −0.016 | Now helps — penalises noisy mixed-speaker chunks correctly |
+| TurnComp        | 0.6159  | −0.011 | Positive contribution within meeting |
+| DiarStab        | 0.6181  | −0.009 | Small positive contribution |
+| Redund          | 0.6279  | +0.001 | Near-zero; slight noise |
+| ASRConf         | 0.6589  | +0.032 | Actively hurts — ASRConf is not discriminative within a meeting |
+
+**RQ3 finding (revised):** The global ablation was misleading — noise features appeared harmful because they couldn't distinguish across 29 meetings. Within a meeting, MixPenalty (−0.016), TurnComp (−0.011), and DiarStab (−0.009) all contribute positively. ASRConf flips from slightly helpful globally to actively harmful per-meeting (+0.032 when dropped), suggesting within-meeting ASRConf variance doesn't track relevance. Redund remains near-zero in both conditions.
 
 ---
 
