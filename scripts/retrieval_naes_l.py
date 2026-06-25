@@ -86,13 +86,16 @@ def load_dense_pool(model: str, pool_size: int) -> pd.DataFrame:
 
 
 def load_labels(model: str) -> pd.DataFrame:
-    """Load eval labels joined with difficulty flags."""
+    """Load eval labels joined with difficulty flags. Always includes audio_id."""
     labels = pd.read_csv(EVAL_DIR / "retrieval_eval_labels.csv")
     queries = pd.read_csv(EVAL_DIR / "retrieval_eval_queries.csv")[
         ["query_id", "audio_id", "difficulty_flag"]
     ]
-    labels = labels.merge(queries, on=["query_id", "audio_id"], how="left")
-    # Exclude no_positives queries from training
+    # audio_id may already be in labels; merge on query_id only to avoid duplicates
+    if "audio_id" in labels.columns:
+        labels = labels.merge(queries[["query_id", "difficulty_flag"]], on="query_id", how="left")
+    else:
+        labels = labels.merge(queries, on="query_id", how="left")
     labels = labels[labels["difficulty_flag"] != "no_positives"].copy()
     return labels
 
@@ -233,27 +236,31 @@ def train_final_model(pool_df: pd.DataFrame, labels: pd.DataFrame, best_c: float
 
 
 def rerank_pool(pool_df: pd.DataFrame, clf, scaler, labels: pd.DataFrame,
-                top_k: int) -> pd.DataFrame:
+                top_k: int, per_meeting: bool = False) -> pd.DataFrame:
     """Apply learned model to full pool, return top-k per query."""
     pool = pool_df.copy()
     X = pool[FEATURE_COLS].values
     pool["naes_l_score"] = clf.predict_proba(scaler.transform(X))[:, 1]
 
-    # Attach ground-truth relevance
     rel_map = labels.set_index(["query_id", "chunk_id"])["relevance"].to_dict()
     pool["relevance"] = pool.apply(
         lambda r: rel_map.get((r["query_id"], r["chunk_id"]), 0), axis=1
     ).astype(int)
 
+    # Build query→meeting map for per-meeting filtering
+    query_meeting = labels[["query_id", "audio_id"]].drop_duplicates("query_id").set_index("query_id")["audio_id"].to_dict()
+
     rows = []
     for qid, grp in pool.groupby("query_id"):
+        if per_meeting and qid in query_meeting:
+            grp = grp[grp["audio_id"] == query_meeting[qid]]
         ranked = grp.sort_values("naes_l_score", ascending=False).reset_index(drop=True)
         ranked["rank"] = ranked.index + 1
         rows.append(ranked.head(top_k))
     return pd.concat(rows, ignore_index=True)
 
 
-def evaluate(results_df: pd.DataFrame, top_k: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+def evaluate(results_df: pd.DataFrame, top_k: int, per_meeting: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
     per_query = []
     for qid, grp in results_df.groupby("query_id"):
         m = _query_metrics(grp, top_k)
@@ -261,14 +268,15 @@ def evaluate(results_df: pd.DataFrame, top_k: int) -> tuple[pd.DataFrame, pd.Dat
         m["audio_id"] = grp["audio_id"].iloc[0]
         per_query.append(m)
     pq = pd.DataFrame(per_query)
+    pipeline_name = "naes_l_pm" if per_meeting else "naes_l"
     summary = pd.DataFrame([{
-        "pipeline": "naes_l",
+        "pipeline": pipeline_name,
         "mrr": pq["mrr"].mean(),
         "recall": pq["recall"].mean(),
         "precision": pq["precision"].mean(),
         "ndcg": pq["ndcg"].mean(),
         "n_queries": len(pq),
-        "best_c": None,  # filled by caller
+        "best_c": None,
     }])
     return pq, summary
 
@@ -282,10 +290,13 @@ def main():
     parser.add_argument("--model", default="medium")
     parser.add_argument("--topk", type=int, default=10)
     parser.add_argument("--rerank-pool", type=int, default=100)
+    parser.add_argument("--per-meeting", action="store_true",
+                        help="Restrict reranking pool to chunks from the query's own meeting")
     args = parser.parse_args()
 
     tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-    print(f"NAES-L | model={args.model} topk={args.topk} pool={args.rerank_pool}")
+    pm_tag = "_pm" if args.per_meeting else ""
+    print(f"NAES-L | model={args.model} topk={args.topk} pool={args.rerank_pool} per_meeting={args.per_meeting}")
 
     print("Loading dense pool and labels...")
     pool_df = load_dense_pool(args.model, args.rerank_pool)
@@ -314,17 +325,17 @@ def main():
 
     # Generate final rankings
     print("\nGenerating final rankings...")
-    results_df = rerank_pool(pool_df, clf, scaler, labels, args.topk)
-    per_query, summary = evaluate(results_df, args.topk)
+    results_df = rerank_pool(pool_df, clf, scaler, labels, args.topk, args.per_meeting)
+    per_query, summary = evaluate(results_df, args.topk, args.per_meeting)
     summary["best_c"] = best_c
     summary["lomo_ndcg"] = round(best_ndcg, 4)
     for feat, w in coef.items():
         summary[f"coef_{feat}"] = w
 
     # Save outputs
-    results_path = RESULTS_DIR / f"results_{args.model}_{tag}.csv"
-    pq_path = SUMMARY_DIR / f"per_query_{args.model}_{tag}.csv"
-    summary_path = SUMMARY_DIR / f"summary_{args.model}_{tag}.csv"
+    results_path = RESULTS_DIR / f"results_{args.model}{pm_tag}_{tag}.csv"
+    pq_path = SUMMARY_DIR / f"per_query_{args.model}{pm_tag}_{tag}.csv"
+    summary_path = SUMMARY_DIR / f"summary_{args.model}{pm_tag}_{tag}.csv"
 
     results_df.to_csv(results_path, index=False)
     per_query.to_csv(pq_path, index=False)

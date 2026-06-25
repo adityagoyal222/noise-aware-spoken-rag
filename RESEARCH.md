@@ -116,14 +116,27 @@ All pipeline stages run as standalone scripts. Notebooks are kept as read-only r
 
 ## Baseline Results (medium model, top-10, 96 queries with positives)
 
+### Global index (cross-meeting retrieval allowed)
+
 | Pipeline      | NDCG@10 | MRR    | Recall@10 | Notes |
 |---------------|---------|--------|-----------|-------|
 | BM25          | 0.2761  | 0.2929 | 0.3507    | Lexical floor |
-| NAES-L        | 0.2783  | 0.1885 | 0.5729    | Highest Recall@10; NDCG below dense (noise features hurt LR) |
-| NAES-H        | 0.3583  | 0.3809 | 0.4549    | DiarStab negated; pool=100; near-matches Dense |
+| NAES-L        | 0.2783  | 0.1885 | 0.5729    | Noise features hurt LR; 82% of failures are cross-meeting errors |
+| NAES-H        | 0.3583  | 0.3809 | 0.4549    | DiarStab negated; pool=100 |
 | Dense         | 0.3669  | 0.3858 | 0.4583    | Semantic baseline |
 | Cross-Encoder | 0.4644  | 0.5000 | 0.5339    | Text-only reranking ceiling |
 | Oracle        | 0.6544  | 0.6007 | 0.9271    | Gold transcripts upper bound |
+
+### Per-meeting index (retrieval restricted to query's meeting)
+
+| Pipeline      | NDCG@10 | MRR    | Recall@10 | Notes |
+|---------------|---------|--------|-----------|-------|
+| Dense-PM      | 0.5962  | 0.6376 | 0.7101    | +63% NDCG vs global Dense |
+| NAES-H-PM     | 0.6081  | 0.6408 | 0.7439    | Beats Dense-PM; noise features now help |
+| NAES-L-PM     | 0.6240  | 0.5796 | 0.8316    | Best NDCG and Recall; learned model now competitive |
+| Oracle        | 0.6544  | 0.6007 | 0.9271    | Gold transcripts upper bound (unchanged) |
+
+**Key finding:** Per-meeting filtering accounts for the majority of the global-index performance gap. NAES-L-PM (0.624) nearly matches Oracle (0.654) on NDCG. The noise features work as intended once cross-meeting rank pollution is removed — NAES-H-PM and NAES-L-PM both outperform Dense-PM.
 
 ---
 

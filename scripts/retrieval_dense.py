@@ -128,6 +128,7 @@ def load_query_labels(queries_csv: Path, checkpoints_dir: Path) -> pd.DataFrame:
             label_rows.append({
                 "query_id": str(label["query_id"]),
                 "query_text": str(label["query_text"]),
+                "audio_id": str(row.audio_id),
                 "chunk_id": str(label["chunk_id"]),
                 "relevance": int(label.get("relevance", 1)),
             })
@@ -201,23 +202,32 @@ def retrieve(
     index: faiss.IndexFlatIP,
     df: pd.DataFrame,
     id_map: list[str],
+    meeting_filter: str | None = None,
 ) -> pd.DataFrame:
+    # Over-retrieve when filtering to a meeting so we have enough candidates after the filter
+    fetch_k = top_k * 20 if meeting_filter else top_k
     q_vec = _normalize(model.encode([query], convert_to_numpy=True, normalize_embeddings=False))
-    scores, indices = index.search(q_vec.astype(np.float32), top_k)
+    scores, indices = index.search(q_vec.astype(np.float32), fetch_k)
     scores, indices = scores.flatten(), indices.flatten()
 
     rows = []
-    for rank, (idx, score) in enumerate(zip(indices, scores), start=1):
+    for idx, score in zip(indices, scores):
         if idx < 0 or idx >= len(id_map):
             continue
         chunk_id = id_map[idx]
         match = df.loc[df["chunk_id"] == chunk_id]
         if match.empty:
             continue
+        if meeting_filter and match.iloc[0].get("audio_id", "") != meeting_filter:
+            continue
         row = match.iloc[0].to_dict()
         row["semantic_score"] = float(score)
-        row["rank"] = rank
         rows.append(row)
+        if len(rows) == top_k:
+            break
+
+    for rank, row in enumerate(rows, start=1):
+        row["rank"] = rank
     return pd.DataFrame(rows)
 
 
@@ -245,15 +255,17 @@ def evaluate(
     index: faiss.IndexFlatIP,
     id_map: list[str],
     top_k: int,
+    per_meeting: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    query_texts = labels_df[["query_id", "query_text"]].drop_duplicates("query_id")
+    query_meta = labels_df[["query_id", "query_text", "audio_id"]].drop_duplicates("query_id")
 
     result_rows = []
     metric_rows = []
 
-    for row in query_texts.itertuples(index=False):
+    for row in query_meta.itertuples(index=False):
         query_id = row.query_id
         query_text = row.query_text
+        meeting = row.audio_id if per_meeting else None
         relevant_set = set(
             labels_df.loc[
                 (labels_df["query_id"] == query_id) & (labels_df["relevance"] > 0),
@@ -261,7 +273,10 @@ def evaluate(
             ].astype(str).tolist()
         )
 
-        candidates = retrieve(query_text, top_k, model, index, chunks_df, id_map)
+        candidates = retrieve(query_text, top_k, model, index, chunks_df, id_map, meeting)
+        if candidates.empty:
+            metric_rows.append({"query_id": query_id, "mrr": 0.0, "recall": 0.0, "precision": 0.0, "ndcg": 0.0})
+            continue
         candidates["query_id"] = query_id
         candidates["query_text"] = query_text
         candidates["relevance"] = candidates["chunk_id"].astype(str).isin(relevant_set).astype(int)
@@ -273,7 +288,8 @@ def evaluate(
     results_df = pd.concat(result_rows, ignore_index=True) if result_rows else pd.DataFrame()
     metrics_df = pd.DataFrame(metric_rows)
     summary_df = metrics_df.mean(numeric_only=True).to_frame().T
-    summary_df.insert(0, "pipeline", "dense")
+    pipeline_name = "dense_pm" if per_meeting else "dense"
+    summary_df.insert(0, "pipeline", pipeline_name)
     return results_df, metrics_df, summary_df
 
 
@@ -283,6 +299,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Dense retrieval baseline.")
     parser.add_argument("--model", default="medium", help="ASR model name (e.g. medium, large-v3)")
     parser.add_argument("--topk", type=int, default=TOP_K_DEFAULT)
+    parser.add_argument("--per-meeting", action="store_true",
+                        help="Restrict retrieval to chunks from the query's own meeting")
     args = parser.parse_args()
 
     aligned_dir = PROJECT_ROOT / "data" / "aligned_chunks" / args.model
@@ -308,15 +326,16 @@ def main() -> int:
     labels_df = load_query_labels(QUERIES_CSV, CHECKPOINTS_DIR)
     print(f"  {labels_df['query_id'].nunique()} queries, {len(labels_df)} label rows.")
 
-    print(f"Evaluating (top-{args.topk}) ...")
+    pm_tag = "_pm" if args.per_meeting else ""
+    print(f"Evaluating (top-{args.topk}, per_meeting={args.per_meeting}) ...")
     results_df, metrics_df, summary_df = evaluate(
-        labels_df, chunks_df, embed_model, index, id_map, args.topk
+        labels_df, chunks_df, embed_model, index, id_map, args.topk, args.per_meeting
     )
 
     run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_df.to_csv(retrieval_dir / f"results_{args.model}_{run_tag}.csv", index=False)
-    metrics_df.to_csv(metrics_dir / f"per_query_{args.model}_{run_tag}.csv", index=False)
-    summary_df.to_csv(metrics_dir / f"summary_{args.model}_{run_tag}.csv", index=False)
+    results_df.to_csv(retrieval_dir / f"results_{args.model}{pm_tag}_{run_tag}.csv", index=False)
+    metrics_df.to_csv(metrics_dir / f"per_query_{args.model}{pm_tag}_{run_tag}.csv", index=False)
+    summary_df.to_csv(metrics_dir / f"summary_{args.model}{pm_tag}_{run_tag}.csv", index=False)
 
     print("\n── Dense retrieval summary ──")
     print(summary_df.to_string(index=False))
